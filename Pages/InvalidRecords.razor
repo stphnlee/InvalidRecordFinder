@@ -1,0 +1,232 @@
+﻿@page "/InvalidRecords"
+@inject IConfiguration config
+@inject IJSRuntime JS
+@using InvalidRecordFinder.Data
+@using System.Text.RegularExpressions
+@using System.Text;
+
+
+<h1>Invalid Records</h1>
+<section>
+    <h2>Select a file to process for invalid records:</h2>
+    <InputFile OnChange="@LoadFile" />
+</section>
+
+@if ( invalidRecords.Count > 0 )
+{
+    <hr />
+    <section>
+        <h2>Results</h2>
+
+        <table class="table">
+            <caption>These records contained invalid data.</caption>
+            <thead>
+                <tr>
+                    <th scope="col">Record Number</th>
+                    <th scope="col">Field Name</th>
+                    <th scope="col">Value</th>
+                </tr>
+            </thead>
+            <tbody>
+            @foreach ( InvalidRecord invalidRecord in invalidRecords )
+            {
+                <tr>
+                    <th scope="row">@invalidRecord.RecordNumber</th>
+                    <td>@invalidRecord.FieldName</td>
+                    <td>@invalidRecord.Value</td>
+                </tr>
+            }
+            </tbody>
+        </table>
+        <button @onclick="DownloadFileFromStream">
+            Download Report
+        </button>
+    </section>
+}
+
+<hr />
+    
+<section>
+    <h2>Fields</h2>
+
+    <table class="table">
+        <thead>
+            <tr>
+                <th scope="col">Field Name</th>
+                <th scope="col">Field Type</th>
+                <th scope="col">Start Index</th>
+                <th scope="col">Length</th>
+                <th scope="col">Format</th>
+                <th scope="col">Required</th>
+                <th scope="col"></th>
+            </tr>
+        </thead>
+        <tbody>
+            @if ( recordFields.Count > 0 )
+            {
+                @foreach(var field in recordFields)
+                {
+                    <tr>
+                        <th scope="row">
+                            <input @bind="field.Name" />
+                        </th>
+                        <td>
+                            <InputSelect @bind-Value="field.Type">
+                                @foreach (var typeEnum in Enum.GetValues(typeof(Field.FieldType)))
+                                {
+                                    <option value="@typeEnum">@typeEnum</option>
+                                }
+                            </InputSelect>
+                        </td>
+                        <td>
+                            <input @bind="field.StartIndex"/>
+                        </td>
+                        <td>
+                            <input @bind="field.FieldLength"/>
+                        </td>
+                        <td>
+                            <input @bind="field.Pattern" />
+                        </td>
+                        <td>
+                            <input type="checkbox" @bind="field.IsRequired" />
+                        </td>
+                        <td>
+                            <input class="btn btn-danger" type="button" value="X" title="Delete field" @onclick="() => DeleteField(field)" />
+                        </td>
+                    </tr>
+                }
+            }
+            <tr><th>New Field</th></tr>
+            <tr>
+                <th scope="row">
+                    <input @bind="newField.Name" />
+                </th>
+                <td>
+                    <InputSelect @bind-Value="newField.Type">
+                        @foreach ( var typeEnum in Enum.GetValues( typeof( Field.FieldType ) ) )
+                        {
+                            <option value="@typeEnum">@typeEnum</option>
+                        }
+                    </InputSelect>
+                </td>
+                <td>
+                    <input @bind="newField.StartIndex" />
+                </td>
+                <td>
+                    <input @bind="newField.FieldLength" />
+                </td>
+                <td>
+                    <input @bind="newField.Pattern" />
+                </td>
+                <td>
+                    <input type="checkbox" @bind="newField.IsRequired" />
+                </td>
+                <td>
+                    <input class="btn btn-success" type="button" value="+" title="Add field" @onclick="() => AddField(newField)" />
+                </td>
+            </tr>
+        </tbody>
+    </table>
+
+    <button class="float-end" @onclick="ResetFields">Reset Fields</button>
+</section>
+
+@if ( errors.Count > 0 )
+{
+    <section>
+        <h2>Errors</h2>
+        <ul class="text-danger">
+            @foreach ( var error in errors )
+            {
+                <li>@error</li>
+            }
+        </ul>
+    </section>
+}
+
+@code {
+    private List<string> errors = new();
+
+    // Set default fields
+    private List<Field> recordFields = Field.SetFields();
+    private List<InvalidRecord> invalidRecords = new ();
+
+    private Field newField = new Field( "", Field.FieldType.Alpha, 0, false, 0, null );
+
+    private void AddField( Field field )
+    {
+        if( field != null )
+        {
+            recordFields.Add( field );
+            newField = ResetNewField(newField);
+
+        }
+    }
+
+    private Field ResetNewField(Field field)
+    {
+        field = new Field( "", Field.FieldType.Alpha, 0, false, 0, null );
+        return field;
+    }
+
+    private void ResetFields()
+    {
+        recordFields.Clear();
+        recordFields = Field.SetFields();
+    }
+
+    private void DeleteField( Field field ) => recordFields.Remove( field );
+
+    private async Task LoadFile( InputFileChangeEventArgs e )
+    {
+        errors.Clear();
+        invalidRecords.Clear();
+        try
+        {
+            MemoryStream memoryStream = new MemoryStream();
+            await e.File.OpenReadStream().CopyToAsync( memoryStream );
+            memoryStream.Position = 0; // rewind
+
+            using ( var reader = new StreamReader( memoryStream ) )
+            {
+                string? line = "";
+                int lineNumber = 1; // adding line number in case recordNumber is invalid
+                while ( ( line = reader.ReadLine() ) != null )
+                {
+                    Record record = new Record {RecordLine = line};
+                    invalidRecords = record.ValidateRecord( recordFields, invalidRecords, lineNumber);
+                    lineNumber++;
+                }
+            }
+        }
+        catch ( Exception ex )
+        {
+            errors.Add( $"File: {e.File.Name} Error: {ex.Message}" );
+        }
+
+    }
+
+    private Stream GetFileStream()
+    {
+        var text = "Record Number,Field Name,Value" + System.Environment.NewLine;
+        foreach ( var invalidRecord in invalidRecords )
+        {
+            text += $"{invalidRecord.RecordNumber},{invalidRecord.FieldName},{invalidRecord.Value}" + System.Environment.NewLine;
+        }
+        byte[] bytes = Encoding.UTF8.GetBytes( text );
+        var fileStream = new MemoryStream( bytes );
+
+        return fileStream;
+    }
+
+    private async Task DownloadFileFromStream()
+    {
+        var fileStream = GetFileStream();
+        var fileName = "report.csv";
+
+        using var streamRef = new DotNetStreamReference( stream: fileStream );
+
+        await JS.InvokeVoidAsync( "downloadFileFromStream", fileName, streamRef );
+    }
+
+}
